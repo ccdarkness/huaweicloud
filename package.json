@@ -1,0 +1,20 @@
+{
+  "name": "huaweicloud",
+  "version": "1.0.0",
+  "description": "华为云空间云盘同步备份工具",
+  "main": "1.js",
+  "dependencies": {
+    "async-mutex": "^0.3.2",
+    "better-sqlite3": "^7.5.0"
+  },
+  "devDependencies": {},
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git@cc:ccdarkness/huaweicloud.git"
+  },
+  "author": "",
+  "license": "ISC"
+}
