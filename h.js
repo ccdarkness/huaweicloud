@@ -4,7 +4,6 @@ https://developer.huawei.com/consumer/cn/doc/development/HMSCore-Guides/web-get-
 https://developer.huawei.com/consumer/cn/doc/development/HMSCore-Guides/server-dev-process-0000001064314366
 https://developer.huawei.com/consumer/cn/doc/development/HMSCore-Guides/server-managing-and-searching-0000001064818926#section775911189449
 https://developer.huawei.com/consumer/cn/doc/development/HMSCore-References/server-api-fileslist-0000001050153649
-http://202.103.68.111:65001/breadbackuper/redirect.php?route=auth
 */
 
 let READLINE = require('readline');
