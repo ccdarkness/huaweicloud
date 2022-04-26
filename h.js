@@ -54,7 +54,7 @@ async function main() {
 
 
     await goto_home();//在这里开始遍历目录
-
+    console.log('准备传输队列...');
     DOWN_INTERVAL = setInterval(function () {
         do_transfer();
         for (down of DOWN_LIST) {
