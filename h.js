@@ -873,7 +873,7 @@ async function do_transfer() {
                 console.log('正在下载:' + transfer.t_file_path);
                 download(transfer).then((down_transfer) => {
                     DB.prepare(`UPDATE fileinfos SET syncTimeMS=@syncTimeMS WHERE id=@id; `).run({
-                        id: down_transfer.file_id,
+                        id: down_transfer.t_f_id,
                         syncTimeMS: Date.now()
                     });
                     console.log('下载完成:' + down_transfer.t_file_path);
