@@ -1,10 +1,6 @@
-﻿/*
-参考文档：
-https://developer.huawei.com/consumer/cn/doc/development/HMSCore-Guides/web-get-access-token-0000001050048946
-https://developer.huawei.com/consumer/cn/doc/development/HMSCore-Guides/server-dev-process-0000001064314366
-https://developer.huawei.com/consumer/cn/doc/development/HMSCore-Guides/server-managing-and-searching-0000001064818926#section775911189449
-https://developer.huawei.com/consumer/cn/doc/development/HMSCore-References/server-api-fileslist-0000001050153649
-*/
+﻿const MY_APP_NAME = 'BREAD-NAS';//网盘文件夹的名称
+const MY_APP_LOCAL = "e:\\hiHuaweiCloud";//本地网盘文件夹路径  @@@如果文件同步后再次改路径请删除h.js同目录下的.h.db数据库，否则导致文件被删除@@@
+
 
 let READLINE = require('readline');
 let URL = require('url');
@@ -17,8 +13,6 @@ const ASYNCMUTEX = require('async-mutex').Mutex;
 let LOCKER = new ASYNCMUTEX();//创建一个互斥锁，防止多个线程读写数组导致错误
 const DB = require('better-sqlite3')('.h.db');
 
-const MY_APP_NAME = 'BREAD-NAS';//网盘文件夹的名称
-const MY_APP_LOCAL = "e:\\hiHuaweiCloud";//本地网盘文件夹路径
 let MY_APP_ID = '';//网盘文件夹ID
 const CLIENT_ID = '105816847';//应用程序ID
 const CLIENT_SECRET = '9dbef5edebd2dfec86700bc27ae606039d5d8cfe08a0206a48f05159d738a386';//应用程序安全码
@@ -31,15 +25,8 @@ const AUTHORIZE_URL = 'https://oauth-login.cloud.huawei.com/oauth2/v3/authorize?
     + '&redirect_uri=' + REDIRECT_URI
     + '&scope=' + SCOPE;
 let AUTHORIZE_CODE = '';
-const ACCESS_TOKEN_URL = 'https://oauth-login.cloud.huawei.com/oauth2/v3/token?grant_type=authorization_code'
-    + '&client_id=' + CLIENT_ID
-    + '&client_secret=' + CLIENT_SECRET
-    + '&redirect_uri=' + REDIRECT_URI
-    + '&code=';
-
 let ACCESS_TOKEN = '';//token
 let ACCESS_TOKEN_REFRESH = '';//刷新的token，保持不过期
-
 let ACCESS_TOKEN_FILE = 'ACCESS_TOKEN.DATA';
 const MAX_UPLOAD_SIZE = 1024 * 1024 * 20;//单次上传尺寸，也是断点续传切片
 let DOWN_LIST = [];
@@ -73,7 +60,7 @@ async function main() {
         for (down of DOWN_LIST) {
             console.log(`传输队列:${down.t_type} ${down.t_id} id:${down.t_f_id} ${down.t_file_path}`);
         }
-    }, 20000);
+    }, 10000);
 }
 
 
@@ -611,10 +598,10 @@ async function merge_file(folder_id, local_path) {
 
 }
 
-function download(file_id, file_path) {
+function download(transfer) {
     const options = {
         hostname: 'driveapis.cloud.huawei.com.cn',
-        path: `/drive/v1/files/${file_id}?form=content`,
+        path: `/drive/v1/files/${transfer.t_f_id}?form=content`,
         headers: {
             Accept: 'application/json',
             Authorization: 'Bearer ' + ACCESS_TOKEN
@@ -630,12 +617,8 @@ function download(file_id, file_path) {
                 _data += chunk;
             });
             res.on('end', () => {
-                FS.writeFileSync(file_path, _data, 'binary');//保存文件
-                DB.prepare(`UPDATE fileinfos SET syncTimeMS=@syncTimeMS WHERE id=@id; `).run({
-                    id: file_id,
-                    syncTimeMS: Date.now()
-                });//如果有记录则更新，没有则等下次同步
-                resolve(_data);
+                FS.writeFileSync(transfer.t_file_path, _data, 'binary');//保存文件
+                resolve(transfer);
             });
             res.on('error', reject);
         });
@@ -835,11 +818,11 @@ function create_folder(folderOBJ) {//创建目录 https://developer.huawei.com/c
 
 }
 
-function delete_file(f_id) {
+function delete_file(transfer) {
     let options = {
         hostname: 'driveapis.cloud.huawei.com.cn',
         port: 443,
-        path: '/drive/v1/files/' + f_id,
+        path: '/drive/v1/files/' + transfer.t_f_id,
         method: 'DELETE',
         headers: {
             'Content-Type': 'application/json',
@@ -853,7 +836,9 @@ function delete_file(f_id) {
             res.on('data', (chunk) => {
                 _data += chunk;
             });
-            res.on('end', resolve(_data));
+            res.on('end', function () {
+                resolve(transfer);
+            });
         });
         req.on('error', reject);
         req.end();
@@ -878,7 +863,7 @@ async function do_transfer() {
     const transfer_list = query.all()//执行查询
     if (transfer_list.length == 0 && DOWN_LIST.length == 0) {
         console.log('传输任务全部完成!');
-        clearInterval(DOWN_INTERVAL);
+        if (DOWN_INTERVAL) clearInterval(DOWN_INTERVAL);
         return;
     }
     for (transfer of transfer_list) {
@@ -886,10 +871,13 @@ async function do_transfer() {
         switch (transfer.t_type) {
             case 'download':
                 console.log('正在下载:' + transfer.t_file_path);
-                download(transfer.t_f_id, transfer.t_file_path).then(() => {
-                    //todo 新建的下载需要插入记录
-                    remove_downlist(transfer.t_id);
-                    console.log('下载完成:' + transfer.t_file_path);
+                download(transfer).then((down_transfer) => {
+                    DB.prepare(`UPDATE fileinfos SET syncTimeMS=@syncTimeMS WHERE id=@id; `).run({
+                        id: down_transfer.file_id,
+                        syncTimeMS: Date.now()
+                    });
+                    console.log('下载完成:' + down_transfer.t_file_path);
+                    remove_downlist(down_transfer.t_id);
                 });
                 break;
             case 'update':
@@ -897,10 +885,10 @@ async function do_transfer() {
                 upload(transfer);
                 break;
             case'delete' :
-                delete_file(transfer.id).then(data => {
-                    remove_downlist(transfer.t_id);
+                delete_file(transfer).then(delete_transfer => {
+                    console.log('删除文件' + delete_transfer.t_f_id + ' ' + delete_transfer.t_file_path);
+                    remove_downlist(delete_transfer.t_id);
                 });
-                console.log('删除文件' + transfer.id);
                 break;
             case 'delete_local'://删除本地文件，在合并文件函数merge_file中处理
                 break;
