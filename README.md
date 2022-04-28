@@ -10,7 +10,7 @@
 
 2.下载本程序h.js 和 package.json 到本地
 
-3.在程序所在文件夹中打开命令行执行 npm install 安装需要用到的模块
+3.在程序所在文件夹中打开命令行执行 npm install 安装需要用到的模块(建议换到国内源，速度快很多 npm config set registry http://registry.npm.taobao.org)
 
 4.打开h.js进行配置
 ````
@@ -38,6 +38,12 @@ const MY_APP_LOCAL = "e:\\hiHuaweiCloud";//本地网盘文件夹路径 ** 如果
 6. 本地未改，云盘修改，【下载到本地】
 7. 本地改名，云盘未改，【更新云盘文件名】todo: 程序遇到改名问题识别为本地缺少文件（夹）和新增文件（夹），导致变成两份，待优化
 7. 本地未改，云盘改名，【更新本地文件名】
+
+## 群晖synology NAS下的安装问题
+群晖默认带有sqlite3，再次安装之后
+sudo npm_config_user=root npm install -g node-pre-gyp
+sudo npm_config_user=root npm install -g node-gyp
+sudo npm_config_user=root npm install -g sqlite3
 
 
 ## 参考文档

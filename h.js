@@ -11,7 +11,8 @@ let QS = require('querystring');
 const CRYPTO = require('crypto');
 const ASYNCMUTEX = require('async-mutex').Mutex;
 let LOCKER = new ASYNCMUTEX();//创建一个互斥锁，防止多个线程读写数组导致错误
-const DB = require('better-sqlite3')('.h.db');
+const SQLITE3 = require('sqlite3');
+const DB = new SQLITE3.Database('.h.db');
 
 let MY_APP_ID = '';//网盘文件夹ID
 const CLIENT_ID = '105816847';//应用程序ID
@@ -301,23 +302,22 @@ function insertData(filelist, in_temp = true) {
     filelist.map(file => {
         console.log('发现:' + file.fileName);
         insertManyData.push({
-            id: file.id,
-            fileName: file.fileName,
-            mimeType: file.mimeType,
-            createdTime: file.createdTime,
-            size: file.size,
-            sha256: file.sha256,
-            parentFolder: file.parentFolder.toString(),
-            editedTime: file.editedTime,
-            editedTimeMS: new Date(file.editedTime).getTime(),//换成时间戳，方便比较
-            version: file.version
+            '@id': file.id,
+            '@fileName': file.fileName,
+            '@mimeType': file.mimeType,
+            '@createdTime': file.createdTime,
+            '@size': file.size,
+            '@sha256': file.sha256,
+            '@parentFolder': file.parentFolder.toString(),
+            '@editedTime': file.editedTime,
+            '@editedTimeMS': new Date(file.editedTime).getTime(),//换成时间戳，方便比较
+            '@version': file.version
         })
     });
-    const insert = DB.prepare(`INSERT INTO ${table_name} (id,fileName, mimeType,createdTime,size,sha256,parentFolder,editedTime,editedTimeMS,version) VALUES (@id,@fileName, @mimeType,@createdTime,@size,@sha256,@parentFolder,@editedTime,@editedTimeMS,@version)`);
-    const insertMany = DB.transaction((files) => {
-        for (const file of files) insert.run(file);
-    });
-    insertMany(insertManyData);
+    DB.run("BEGIN TRANSACTION");
+    let insertMany = DB.prepare(`INSERT INTO ${table_name} (id,fileName, mimeType,createdTime,size,sha256,parentFolder,editedTime,editedTimeMS,version) VALUES (@id,@fileName, @mimeType,@createdTime,@size,@sha256,@parentFolder,@editedTime,@editedTimeMS,@version)`);
+    for (let file of insertManyData) insertMany.run(file);
+    DB.run("COMMIT TRANSACTION");
 }
 
 //合并temp表到正式表，作用是排查是否有文件变动
@@ -436,8 +436,20 @@ function delete_folder(path) {
 //处理合并
 async function merge_file(folder_id, local_path) {
     mkdirP(local_path);
+
     //先处理本地删除任务，否则在会发现本地有文件而云端没有就变上传了
-    const query_transfer = DB.prepare(`SELECT * FROM transfer_list WHERE t_parentFolder= ? AND t_type='delete_local';`).all(folder_id);
+    const query_transfer = await function () {//异步查询改为同步
+        return new Promise(function (resolve, reject) {
+            DB.all(`SELECT * FROM transfer_list WHERE t_parentFolder= ? AND t_type='delete_local';`, folder_id, function (err, row) {
+                if (err) {
+                    reject("merge_file query_transfer error: " + err.message);
+                } else {
+                    resolve(row);
+                }
+            })
+        })
+    }();
+
     for (let transfer of query_transfer) {
         let full_filename = PATH.join(local_path, transfer.t_filename);
         if (FS.existsSync(full_filename)) {
@@ -449,8 +461,18 @@ async function merge_file(folder_id, local_path) {
         }
     }
 
-    const query = DB.prepare('SELECT * FROM fileinfos WHERE parentFolder= ?');//一个查询语句对象
-    const db_file_list = query.all(folder_id)//执行查询
+    const db_file_list = await function () {//异步查询改为同步
+        return new Promise(function (resolve, reject) {
+            DB.all(`SELECT * FROM fileinfos WHERE parentFolder= ?`, folder_id, function (err, row) {
+                if (err) {
+                    reject("merge_file query_transfer error: " + err.message);
+                } else {
+                    resolve(row);
+                }
+            })
+        })
+    }();
+
     const local_file_list = FS.readdirSync(local_path);
     let update_info_list = [];
     let transfer_list = [];//传输队列
@@ -475,54 +497,54 @@ async function merge_file(folder_id, local_path) {
                 if (db_item.editedTimeMS > db_item.syncTimeMS && file_hash256 !== db_item.sha256) {//云文件的修改时间大于最后同步时间，则下载
                     console.log('下载(云地):' + db_item.editedTimeMS + '|' + db_item.syncTimeMS + ' ' + hash256(full_path) + '|' + db_item.sha256 + ' ' + find_item.fileName);
                     transfer_list.push({
-                        t_f_id: db_item.id,
-                        t_type: 'download',
-                        t_parentFolder: folder_id,
-                        t_file_path: full_path,
-                        t_info: ''
+                        '@t_f_id': db_item.id,
+                        '@t_type': 'download',
+                        '@t_parentFolder': folder_id,
+                        '@t_file_path': full_path,
+                        '@t_info': ''
                     });
                 } else if (db_item.size !== find_item.stat.size || file_hash256 !== db_item.sha256) {//先判断文件大小，文件不一样就不用计算sha256了
                     //云端有的文件不能直接上传覆盖，只能更新上传
                     console.log('更新:' + db_item.size + '|' + find_item.stat.size + ' ' + db_item.sha256 + '|' + file_hash256 + ' ' + find_item.fileName + '|' + full_path);//上传到服务器
                     //console.log('更新:' + find_item.fileName);
                     transfer_list.push({
-                        t_f_id: db_item.id,
-                        t_type: 'update',
-                        t_parentFolder: folder_id,
-                        t_file_path: full_path,
-                        t_info: JSON.stringify({sha256: file_hash256, editedTime: new Date().toISOString()})
+                        '@t_f_id': db_item.id,
+                        '@t_type': 'update',
+                        '@t_parentFolder': folder_id,
+                        '@t_file_path': full_path,
+                        '@t_info': JSON.stringify({sha256: file_hash256, editedTime: new Date().toISOString()})
                     });
                 } else {
-                    update_info_list.push({id: db_item.id, syncTimeMS: Date.now()});
+                    update_info_list.push({'@id': db_item.id, '@syncTimeMS': Date.now()});
                 }
             } else {//文件夹则进入循环
                 merge_file(db_item.id, full_path);
-                update_info_list.push({id: db_item.id, syncTimeMS: Date.now()});
+                update_info_list.push({'@id': db_item.id, '@syncTimeMS': Date.now()});
             }
 
         } else {//云文件有，本地没有
             if (db_item.editedTimeMS < db_item.syncTimeMS) { //如果同步时间大于编辑时间，说明本地下载过，然后删除了，需要删除云端文件
                 transfer_list.push({
-                    t_f_id: db_item.id,
-                    t_type: 'delete',
-                    t_parentFolder: folder_id,
-                    t_file_path: full_path,
-                    t_info: ''
+                    '@t_f_id': db_item.id,
+                    '@t_type': 'delete',
+                    '@t_parentFolder': folder_id,
+                    '@t_file_path': full_path,
+                    '@t_info': ''
                 });
             } else {
                 console.log('下载(云):' + db_item.fileName);
                 if (db_item.mimeType !== 'application/vnd.huawei-apps.folder') {//下载到本地
                     transfer_list.push({
-                        t_f_id: db_item.id,
-                        t_type: 'download',
-                        t_parentFolder: folder_id,
-                        t_file_path: full_path,
-                        t_info: ''
+                        '@t_f_id': db_item.id,
+                        '@t_type': 'download',
+                        '@t_parentFolder': folder_id,
+                        '@t_file_path': full_path,
+                        '@t_info': ''
                     });
                 } else {//如果是目录，则创建
                     mkdirP(PATH.join(local_path, db_item.fileName));
                     merge_file(db_item.id, full_path);
-                    update_info_list.push({id: db_item.id, syncTimeMS: Date.now()});
+                    update_info_list.push({'@id': db_item.id, '@syncTimeMS': Date.now()});
                 }
             }
         }
@@ -566,11 +588,11 @@ async function merge_file(folder_id, local_path) {
                 //添加到传输队列
                 console.log('上传文件:' + full_path);
                 transfer_list.push({
-                    t_f_id: '',
-                    t_type: 'upload',
-                    t_parentFolder: folder_id,
-                    t_file_path: full_path,
-                    t_info: ''
+                    '@t_f_id': '',
+                    '@t_type': 'upload',
+                    '@t_parentFolder': folder_id,
+                    '@t_file_path': full_path,
+                    '@t_info': ''
                 });
             }
         }
@@ -578,23 +600,16 @@ async function merge_file(folder_id, local_path) {
 
     insertData(insert_list, false);
 
-//更新文件信息
-    const update = DB.prepare('UPDATE fileinfos SET syncTimeMS=@syncTimeMS WHERE id=@id');
-    const updateMany = DB.transaction((datas) => {
-        for (const data of datas) update.run(data);
-    });
-    updateMany(update_info_list);
+    //更新文件信息
+    let updateMany = DB.prepare('UPDATE fileinfos SET syncTimeMS=@syncTimeMS WHERE id=@id ;');
+    for (let data of update_info_list) updateMany.run(data);
 
     //清空当前需要删除的传输列表
     DB.prepare(`delete from transfer_list WHERE t_parentFolder= ? AND t_type='delete_local'`).run(folder_id);
 
-//把传输列表写入数据库
-    const insert = DB.prepare('INSERT INTO transfer_list (t_f_id,t_type,t_parentFolder,t_file_path,t_info) SELECT @t_f_id,@t_type,@t_parentFolder,@t_file_path,@t_info WHERE NOT EXISTS (select 1 from transfer_list where t_file_path=@t_file_path AND t_file_path is not NULL  LIMIT 0,1 )');
-    const insertMany = DB.transaction((transfers) => {
-        for (const transfer of transfers) insert.run(transfer);
-    });
-    insertMany(transfer_list);
-
+    //把传输列表写入数据库
+    const insertMany = DB.prepare('INSERT INTO transfer_list (t_f_id,t_type,t_parentFolder,t_file_path,t_info) SELECT @t_f_id,@t_type,@t_parentFolder,@t_file_path,@t_info WHERE NOT EXISTS (select 1 from transfer_list where t_file_path=@t_file_path AND t_file_path is not NULL  LIMIT 0,1 )');
+    for (const transfer of transfer_list) insertMany.run(transfer);
 
 }
 
@@ -698,15 +713,21 @@ async function upload(transfer) {
                     if (data_json.statusCode == '200') {//上传成功
                         console.log('上传成功:' + transfer.t_file_path);
                         DB.prepare(`UPDATE fileinfos SET syncTimeMS=@syncTimeMS WHERE id=@id; `).run({
-                            id: transfer.t_f_id,
-                            syncTimeMS: Date.now()
+                            '@id': transfer.t_f_id,
+                            '@syncTimeMS': Date.now()
                         });
                         remove_downlist(transfer.t_id);
                     } else if (data_json.statusCode == '308') {//继续上传
                         if (data_json.rangeList && data_json.rangeList.length > 0) {
-                            let range_arr = data_json.rangeList[0].split('-');
+                            //let range_arr = data_json.rangeList[0].split('-');
                             //继续拆分上传
-                            DB.prepare(`UPDATE transfer_list SET t_url=@t_url,t_start=@t_start,t_end=@t_end,t_total=@t_total WHERE t_id=@t_id`).run(transfer);//先存一下上传成功的片段
+                            DB.prepare(`UPDATE transfer_list SET t_url=@t_url,t_start=@t_start,t_end=@t_end,t_total=@t_total WHERE t_id=@t_id`).run({
+                                '@t_url': transfer.t_url,
+                                '@t_start': transfer.t_start,
+                                '@t_end': transfer.t_end,
+                                '@t_total': transfer.t_total,
+                                '@t_id': transfer.t_id,
+                            });//先存一下上传成功的片段
                             upload(transfer);//递归上传
                         }
                     }
@@ -718,7 +739,13 @@ async function upload(transfer) {
             transfer.t_start = 0;
             transfer.t_end = 0;
             transfer.t_total = 0;
-            DB.prepare(`UPDATE transfer_list SET t_url=@t_url,t_start=@t_start,t_end=@t_end,t_total=@t_total WHERE t_id=@t_id`).run(transfer);//发生错误，重置上传
+            DB.prepare(`UPDATE transfer_list SET t_url=@t_url,t_start=@t_start,t_end=@t_end,t_total=@t_total WHERE t_id=@t_id`).run({
+                '@t_url': transfer.t_url,
+                '@t_start': transfer.t_start,
+                '@t_end': transfer.t_end,
+                '@t_total': transfer.t_total,
+                '@t_id': transfer.t_id,
+            });//发生错误，重置上传
             upload(transfer);
             remove_downlist(transfer.t_id);
         });
@@ -858,9 +885,20 @@ async function do_transfer() {
         ids += DOWN.t_id + ',';
     }
     ids += '0';
-    let query = DB.prepare(`SELECT * FROM transfer_list  WHERE t_id NOT IN(${ids}) AND t_type!='delete_local'  ORDER BY t_id ASC LIMIT 0,${limit}`);//一个查询语句对象
 
-    const transfer_list = query.all()//执行查询
+    const transfer_list = await function () {//异步查询改为同步
+        return new Promise(function (resolve, reject) {
+            DB.all(`SELECT * FROM transfer_list  WHERE t_id NOT IN(${ids}) AND t_type!='delete_local'  ORDER BY t_id ASC LIMIT 0,${limit}`, [], function (err, row) {
+                if (err) {
+                    reject("do_transfer transfer_list error: " + err.message);
+                } else {
+                    resolve(row);
+                }
+            })
+        })
+    }();
+
+
     if (transfer_list.length == 0 && DOWN_LIST.length == 0) {
         console.log('传输任务全部完成!');
         if (DOWN_INTERVAL) clearInterval(DOWN_INTERVAL);
@@ -873,8 +911,8 @@ async function do_transfer() {
                 console.log('正在下载:' + transfer.t_file_path);
                 download(transfer).then((down_transfer) => {
                     DB.prepare(`UPDATE fileinfos SET syncTimeMS=@syncTimeMS WHERE id=@id; `).run({
-                        id: down_transfer.t_f_id,
-                        syncTimeMS: Date.now()
+                        '@id': down_transfer.t_f_id,
+                        '@syncTimeMS': Date.now()
                     });
                     console.log('下载完成:' + down_transfer.t_file_path);
                     remove_downlist(down_transfer.t_id);

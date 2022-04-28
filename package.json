@@ -5,7 +5,7 @@
   "main": "1.js",
   "dependencies": {
     "async-mutex": "^0.3.2",
-    "better-sqlite3": "^7.5.0"
+    "sqlite3": "^5.0.5"
   },
   "devDependencies": {},
   "scripts": {
